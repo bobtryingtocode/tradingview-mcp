@@ -11,9 +11,10 @@ export function registerWebhookTools(server) {
       host: z.string().optional().describe('Bind address (default 127.0.0.1; use 0.0.0.0 to expose externally)'),
       secret: z.string().min(8).optional().describe('Shared secret (>=8 chars). Falls back to TV_WEBHOOK_SECRET env var.'),
       max_alerts: z.coerce.number().int().positive().optional().describe('Ring buffer size (default 500)'),
+      rate_limit_per_min: z.coerce.number().int().nonnegative().optional().describe('Per-IP requests per minute (default 60; 0 disables)'),
     },
-    async ({ port, host, secret, max_alerts }) => {
-      try { return jsonResult(await core.start({ port, host, secret, max_alerts })); }
+    async ({ port, host, secret, max_alerts, rate_limit_per_min }) => {
+      try { return jsonResult(await core.start({ port, host, secret, max_alerts, rate_limit_per_min })); }
       catch (err) { return jsonResult({ success: false, error: err.message }, true); }
     }
   );

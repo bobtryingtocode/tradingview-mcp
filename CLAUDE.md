@@ -86,8 +86,10 @@ TradingView Pro alerts can POST to a webhook URL. Run a local receiver and read 
 Notes:
 - Default ring buffer holds 500 alerts; override with `max_alerts`.
 - Bodies > 64 KB are rejected (413).
-- Server accepts JSON or plain text. JSON is parsed into `body`; non-JSON kept in `raw`.
-- Auth: `X-Webhook-Secret: <secret>` or `Authorization: Bearer <secret>`. Compared in constant time.
+- Server accepts JSON or plain text. Each alert has `raw` (the original string), `body` (parsed JSON or null), and `parsed: boolean`.
+- Auth: `X-Webhook-Secret: <secret>` or `Authorization: Bearer <secret>`. Compared in constant time over SHA-256 digests.
+- Per-IP rate limit: 60 req/min default (override `rate_limit_per_min`; 0 disables). Over-limit returns 429 with `Retry-After`.
+- `/health` is unauthenticated and returns only `{ok: true}` — no counters that could leak activity if the port is exposed.
 
 ### "Navigate the UI"
 - `ui_open_panel` → open/close pine-editor, strategy-tester, watchlist, alerts, trading

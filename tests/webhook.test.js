@@ -118,6 +118,8 @@ describe('webhook receiver', () => {
     const alerts = list().alerts;
     assert.equal(alerts.length, 1);
     assert.deepEqual(alerts[0].body, { symbol: 'ES1!', action: 'buy', price: 4500 });
+    assert.equal(alerts[0].parsed, true);
+    assert.equal(alerts[0].raw, '{"symbol":"ES1!","action":"buy","price":4500}');
     assert.equal(alerts[0].contentType, 'application/json');
   });
 
@@ -130,7 +132,20 @@ describe('webhook receiver', () => {
     const alerts = list().alerts;
     assert.equal(alerts.length, 1);
     assert.equal(alerts[0].body, null);
+    assert.equal(alerts[0].parsed, false);
     assert.equal(alerts[0].raw, 'plain text alert');
+  });
+
+  it('parsed=false for invalid JSON, raw is preserved', async () => {
+    await request(port, {
+      body: '{not json',
+      headers: { 'content-type': 'application/json', 'x-webhook-secret': SECRET },
+    });
+    const alerts = list().alerts;
+    assert.equal(alerts.length, 1);
+    assert.equal(alerts[0].parsed, false);
+    assert.equal(alerts[0].body, null);
+    assert.equal(alerts[0].raw, '{not json');
   });
 
   it('parses JSON body even without content-type', async () => {
@@ -158,10 +173,82 @@ describe('webhook receiver', () => {
     assert.equal(r.headers.allow, 'POST');
   });
 
-  it('GET /health responds 200 without auth', async () => {
+  it('GET /health responds 200 without auth and without leaking counters', async () => {
+    // First, generate some receive activity
+    await request(port, {
+      body: '{"x":1}',
+      headers: { 'content-type': 'application/json', 'x-webhook-secret': SECRET },
+    });
     const r = await request(port, { method: 'GET', path: '/health' });
     assert.equal(r.status, 200);
-    assert.match(r.body, /"ok":true/);
+    const body = JSON.parse(r.body);
+    assert.equal(body.ok, true);
+    // Should NOT include any counters that leak webhook activity
+    assert.equal(body.received, undefined);
+    assert.equal(body.total_received, undefined);
+    assert.equal(body.count, undefined);
+  });
+
+  it('rate-limits per IP and reports 429', async () => {
+    await stop();
+    await start({ port: 0, secret: SECRET, rate_limit_per_min: 3 });
+    const p = status().port;
+    const codes = [];
+    for (let i = 0; i < 5; i++) {
+      const r = await request(p, {
+        body: JSON.stringify({ i }),
+        headers: { 'content-type': 'application/json', 'x-webhook-secret': SECRET },
+      });
+      codes.push(r.status);
+    }
+    assert.deepEqual(codes, [200, 200, 200, 429, 429]);
+    assert.equal(status().total_rate_limited, 2);
+    // Last successful response should include Retry-After hint on the 429
+    const lateRes = await request(p, {
+      body: '{}',
+      headers: { 'content-type': 'application/json', 'x-webhook-secret': SECRET },
+    });
+    assert.equal(lateRes.status, 429);
+    assert.equal(lateRes.headers['retry-after'], '60');
+
+    await stop();
+    const restart = await start({ port: 0, secret: SECRET });
+    port = restart.port;
+  });
+
+  it('rate_limit_per_min: 0 disables rate-limiting', async () => {
+    await stop();
+    await start({ port: 0, secret: SECRET, rate_limit_per_min: 0 });
+    const p = status().port;
+    for (let i = 0; i < 20; i++) {
+      const r = await request(p, {
+        body: '{}',
+        headers: { 'content-type': 'application/json', 'x-webhook-secret': SECRET },
+      });
+      assert.equal(r.status, 200);
+    }
+    await stop();
+    const restart = await start({ port: 0, secret: SECRET });
+    port = restart.port;
+  });
+
+  it('rate-limits 401s too so auth-fail brute force is bounded', async () => {
+    await stop();
+    await start({ port: 0, secret: SECRET, rate_limit_per_min: 2 });
+    const p = status().port;
+    const codes = [];
+    for (let i = 0; i < 4; i++) {
+      const r = await request(p, {
+        body: '{}',
+        headers: { 'content-type': 'application/json', 'x-webhook-secret': 'wrong' },
+      });
+      codes.push(r.status);
+    }
+    assert.deepEqual(codes, [401, 401, 429, 429]);
+
+    await stop();
+    const restart = await start({ port: 0, secret: SECRET });
+    port = restart.port;
   });
 
   it('ring buffer caps at max_alerts', async () => {
