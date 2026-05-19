@@ -13,7 +13,7 @@
  * without an explicit tunnel.
  */
 import http from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash, timingSafeEqual } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 
 const DEFAULT_PORT = 9223;
@@ -58,10 +58,11 @@ function pushAlert(entry) {
 
 function constantTimeEqual(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false;
-  if (a.length !== b.length) return false;
-  let mismatch = 0;
-  for (let i = 0; i < a.length; i++) mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return mismatch === 0;
+  // Hash both to fixed-length digests so timingSafeEqual gets equal-length
+  // inputs and we don't leak secret length via early length check.
+  const ha = createHash('sha256').update(a).digest();
+  const hb = createHash('sha256').update(b).digest();
+  return timingSafeEqual(ha, hb);
 }
 
 function extractSecret(req) {
@@ -139,7 +140,30 @@ export function handleRequest(req, res) {
 }
 
 export async function start({ port, host, secret, max_alerts } = {}, deps = {}) {
+  const requestedSecret = (typeof secret === 'string' && secret.length)
+    ? secret
+    : process.env.TV_WEBHOOK_SECRET || null;
+
   if (state.server) {
+    const conflicts = [];
+    // port 0 means "any free port" — don't treat as a conflict
+    if (Number.isFinite(port) && port !== 0 && port !== state.port) {
+      conflicts.push(`port (running=${state.port}, requested=${port})`);
+    }
+    if (host && host !== state.host) {
+      conflicts.push(`host (running=${state.host}, requested=${host})`);
+    }
+    if (requestedSecret && requestedSecret !== state.secret) {
+      conflicts.push('secret (differs from running)');
+    }
+    if (Number.isFinite(max_alerts) && Math.floor(max_alerts) !== state.maxAlerts) {
+      conflicts.push(`max_alerts (running=${state.maxAlerts}, requested=${Math.floor(max_alerts)})`);
+    }
+    if (conflicts.length) {
+      throw new Error(
+        `Webhook already running on ${state.host}:${state.port}. Call webhook_stop first to change: ${conflicts.join(', ')}`
+      );
+    }
     return {
       success: true,
       already_running: true,
@@ -149,9 +173,7 @@ export async function start({ port, host, secret, max_alerts } = {}, deps = {}) 
     };
   }
 
-  const useSecret = (typeof secret === 'string' && secret.length)
-    ? secret
-    : process.env.TV_WEBHOOK_SECRET || null;
+  const useSecret = requestedSecret;
   if (!useSecret || useSecret.length < MIN_SECRET_LEN) {
     throw new Error(
       `Webhook secret required (>= ${MIN_SECRET_LEN} chars). Pass \`secret\` or set TV_WEBHOOK_SECRET env var.`

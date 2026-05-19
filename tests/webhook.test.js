@@ -70,10 +70,25 @@ describe('webhook receiver', () => {
     port = r.port;
   });
 
-  it('returns already_running on second start', async () => {
-    const r = await start({ port: 0, secret: 'another-different-secret' });
+  it('returns already_running on second start with matching config', async () => {
+    const r = await start({ port: 0, secret: SECRET });
     assert.equal(r.already_running, true);
     assert.equal(r.port, port);
+  });
+
+  it('errors on second start if config conflicts', async () => {
+    await assert.rejects(
+      () => start({ port: 0, secret: 'a-different-long-secret' }),
+      /already running.*secret/i
+    );
+    await assert.rejects(
+      () => start({ port: 9999, secret: SECRET }),
+      /already running.*port/i
+    );
+    await assert.rejects(
+      () => start({ max_alerts: 42, secret: SECRET }),
+      /already running.*max_alerts/i
+    );
   });
 
   it('rejects POST without auth header (401)', async () => {

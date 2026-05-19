@@ -23,7 +23,7 @@ const server = new McpServer(
     description: 'AI-assisted TradingView chart analysis and Pine Script development via Chrome DevTools Protocol',
   },
   {
-    instructions: `TradingView MCP — 78 tools for reading and controlling a live TradingView Desktop chart.
+    instructions: `TradingView MCP — 83 tools for reading and controlling a live TradingView Desktop chart, plus an inbound webhook receiver for TradingView alerts.
 
 TOOL SELECTION GUIDE — use this to pick the right tool:
 
